@@ -1,25 +1,34 @@
-# main.py
 import discord
 from discord.ext import commands
 import youtube_dl
 import asyncio
 import os
+import subprocess
+import sys
 
-# Get token from environment variable (set this in Railway)
+# Check if ffmpeg is available
+try:
+    subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+    print("✅ FFmpeg is installed and working!")
+except (subprocess.CalledProcessError, FileNotFoundError):
+    print("❌ FFmpeg is not installed or not in PATH")
+    sys.exit(1)
+
 TOKEN = os.getenv('DISCORD_TOKEN')
+if not TOKEN:
+    print("❌ DISCORD_TOKEN environment variable not set!")
+    sys.exit(1)
 
-# Bot setup with required intents
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Suppress noise from console
+# Suppress noise
 youtube_dl.utils.bug_reports_message = lambda: ''
 
-# YouTube DL configuration
+# Configure youtube-dl
 ytdl_format_options = {
     'format': 'bestaudio/best',
-    'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
     'restrictfilenames': True,
     'noplaylist': True,
     'nocheckcertificate': True,
@@ -28,7 +37,7 @@ ytdl_format_options = {
     'quiet': True,
     'no_warnings': True,
     'default_search': 'auto',
-    'source_address': '0.0.0.0'  # Bind to IPv4
+    'source_address': '0.0.0.0'
 }
 
 ffmpeg_options = {
@@ -51,7 +60,6 @@ class YTDLSource(discord.PCMVolumeTransformer):
         data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
         
         if 'entries' in data:
-            # Take first item from a playlist
             data = data['entries'][0]
         
         filename = data['url'] if stream else ytdl.prepare_filename(data)
@@ -59,47 +67,39 @@ class YTDLSource(discord.PCMVolumeTransformer):
 
 @bot.event
 async def on_ready():
-    print(f'{bot.user} has connected to Discord!')
+    print(f'✅ {bot.user} has connected to Discord!')
+    await bot.change_presence(activity=discord.Game(name="!play | Music Bot"))
 
-@bot.command(name='play', help='Plays a song from YouTube')
+@bot.command(name='play')
 async def play(ctx, *, url):
+    """Play music from YouTube"""
     if not ctx.author.voice:
-        await ctx.send("You need to be in a voice channel!")
+        await ctx.send("❌ You need to be in a voice channel!")
         return
     
     channel = ctx.author.voice.channel
     
-    # Join voice channel if not already connected
     if ctx.voice_client is None:
         await channel.connect()
     elif ctx.voice_client.channel != channel:
         await ctx.voice_client.move_to(channel)
     
     async with ctx.typing():
-        player = await YTDLSource.from_url(url, loop=bot.loop, stream=True)
-        ctx.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
-    
-    await ctx.send(f'Now playing: {player.title}')
+        try:
+            player = await YTDLSource.from_url(url, loop=bot.loop, stream=True)
+            ctx.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
+            await ctx.send(f'🎵 Now playing: **{player.title}**')
+        except Exception as e:
+            await ctx.send(f"❌ Error playing song: {str(e)}")
 
-@bot.command(name='stop', help='Stops the music and clears the queue')
+@bot.command(name='stop')
 async def stop(ctx):
+    """Stop music and disconnect"""
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
-        await ctx.send("Disconnected from voice channel")
+        await ctx.send("👋 Disconnected from voice channel")
     else:
-        await ctx.send("I'm not in a voice channel!")
-
-@bot.command(name='pause', help='Pauses the current song')
-async def pause(ctx):
-    if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.pause()
-        await ctx.send("Paused ⏸️")
-
-@bot.command(name='resume', help='Resumes the current song')
-async def resume(ctx):
-    if ctx.voice_client and ctx.voice_client.is_paused():
-        ctx.voice_client.resume()
-        await ctx.send("Resumed ▶️")
+        await ctx.send("❌ I'm not in a voice channel!")
 
 if __name__ == "__main__":
     bot.run(TOKEN)
